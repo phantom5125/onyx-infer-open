@@ -141,6 +141,9 @@ class GraphSession {
                                     const Tensor& indices, uint32_t shift_part, double epsilon);
   Tensor indexed_gated_residual(const Tensor& x, const Tensor& value, const Tensor& table,
                                 const Tensor& indices, uint32_t gate_part);
+  // Mutates a DiT-owned residual that has no other live readers.
+  void metal_gated_residual(Tensor& residual, const Tensor& value, const Tensor& table,
+                           const Tensor& indices, uint32_t gate_part);
   Tensor layer_norm(const Tensor& x, const Tensor& weight, const Tensor& bias, double epsilon);
   Tensor rope(const Tensor& x, const Tensor& cosine, const Tensor& sine);
   Tensor attention(const Tensor& q, const Tensor& k, const Tensor& v, bool causal, double scale);
@@ -167,6 +170,7 @@ class GraphSession {
   id<MTLCommandQueue> queue_;
   NSMutableDictionary* graphs_;
   std::map<std::string, Tensor> zero_cache_;
+  id<MTLComputePipelineState> adaln_gate_pipeline_ = nil;
   bool profile_enabled_ = false;
   std::map<std::string, std::pair<uint64_t, uint64_t>> profile_;
   // Cached scales, biases, and pipeline state for the optional Steel and SIMD paths.

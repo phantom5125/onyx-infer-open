@@ -90,6 +90,19 @@ uv run python benchmarks/run_native.py --case benchmarks/requests/teapot-1024.js
   --label m4-prefetch --target config/targets/m4-air-24gb.json --dit-prefetch
 ```
 
+## OnyxAdaLN in-place gated residual
+
+Set `ONYX_DIT_METAL_GATE=1` to use the experimental path. The DiT stage reports the effective mode as `metal_gate`. The Metal kernel reads the gate from the per-modality table, evaluates an FP32 fused multiply-add, and writes the BF16 residual in place. The existing indexed MPSGraph RMSNorm reads shift and scale from the same table and skips the standalone six-output gather.
+
+Three interleaved teapot pairs per resolution used one Release build on `a82f0cf`, an M5 Max with 36 GiB, the W4 pack, the `max-quality` profile, a warm modulation cache, prefetch and VAE batch 25.
+
+| Resolution | Native DiT | End to end | DiT peak physical footprint |
+| --- | ---: | ---: | ---: |
+| 1024×1024 | 13.23 → 12.39 s | 16.80 → 15.96 s | 6.43 → 6.37 GiB |
+| 4096×4096 | 181.39 → 171.67 s | 199.44 → 189.61 s | 12.31 → 11.32 GiB |
+
+The isolated 16453-row gate measured 5.50 → 1.47 ms. Both resolutions matched latent and PNG hashes, as did the separate 1024×1024 single-reference edit against the existing indexed path. Overlapping 4K trials were rerun. [Raw samples, build identity and validation](../benchmarks/results/m5-max-36gb-adaln-metal-gate-v1.json)
+
 ## Correctness and profiling
 
 MLX reference latents correlated 0.9962 with the native MPSGraph path. MPSGraph and native BF16 SIMD latents correlated 0.9973. Image SSIM against the MLX reference was 0.9812 for native MPSGraph and 0.9553 for native BF16 SIMD. The streamed MLX reference took 225.4 s for this comparison and native MPSGraph took 36.8 s.

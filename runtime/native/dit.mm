@@ -417,9 +417,11 @@ Tensor denoise_image(const std::string& model, const std::string& embedding_path
   const int64_t target_start = text_count + reference_patch_count;
   const int64_t sequence_count = target_start + image_count;
   const size_t reference_images = references.grids.size();
+  const char* metal_gate_env = std::getenv("ONYX_DIT_METAL_GATE");
+  const bool metal_gate = metal_gate_env && std::string_view(metal_gate_env) == "1";
   const char* indexed_modulation_env = std::getenv("ONYX_DIT_INDEXED_MODULATION");
-  const bool indexed_modulation = reference_images && indexed_modulation_env &&
-      std::string_view(indexed_modulation_env) == "1";
+  const bool indexed_modulation = metal_gate || (reference_images && indexed_modulation_env &&
+      std::string_view(indexed_modulation_env) == "1");
   references.grids.emplace_back(rows, columns);
   auto [cosine, sine] = rope_angles(store, text_count, references.grids);
   Tensor token_indices = make_tensor({sequence_count}, MPSDataTypeInt32, std::vector<float>(sequence_count, 0));
@@ -466,8 +468,12 @@ Tensor denoise_image(const std::string& model, const std::string& embedding_path
           ? session.indexed_modulated_rms_norm(input, norm, table, token_indices, shift, 1e-5)
           : session.modulated_rms_norm(input, norm, parts[shift + 1], parts[shift], 1e-5);
     };
-    const auto residual = [&](const Tensor& input, const Tensor& value, ModulationPart gate) {
-      return indexed_modulation
+    const auto apply_residual = [&](Tensor& input, const Tensor& value, ModulationPart gate) {
+      if (metal_gate) {
+        session.metal_gated_residual(input, value, table, token_indices, gate);
+        return;
+      }
+      input = indexed_modulation
           ? session.indexed_gated_residual(input, value, table, token_indices, gate)
           : session.gated_residual(input, value, parts[gate]);
     };
@@ -487,10 +493,10 @@ Tensor denoise_image(const std::string& model, const std::string& embedding_path
       }
       const std::string prefix = "blocks." + std::to_string(layer) + ".";
       Tensor attended = qkv_attention(session, store, prefix + "attn", h, &cosine, &sine);
-      x = residual(x, attended, kAttentionGate);
+      apply_residual(x, attended, kAttentionGate);
       h = modulate(x, store.tensor(prefix + "norm2.weight"), kMlpShift);
       Tensor hidden = mlp(session, store, prefix + "mlp", h);
-      x = residual(x, hidden, kMlpGate);
+      apply_residual(x, hidden, kMlpGate);
       if (layer + 1 < kDiTBlocks) {
         prepare_modulation(layer + 1);
         h = modulate(x, store.tensor("blocks." + std::to_string(layer + 1) + ".norm1.weight"), kAttentionShift);
@@ -525,10 +531,12 @@ Tensor denoise_image(const std::string& model, const std::string& embedding_path
   save_tensor(output, "latent", latent);
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
   std::printf("{\"stage\":\"dit\",\"profile\":\"%s\",\"steps\":6,\"seconds\":%.6f,\"output\":\"%s\","
-              "\"reference_images\":%zu,\"indexed_modulation\":%s,\"modulation_cache\":\"%s\",\"modulation_seconds\":%.6f,\"lazy_modulation\":%s,"
+              "\"reference_images\":%zu,\"indexed_modulation\":%s,\"metal_gate\":%s,"
+              "\"modulation_cache\":\"%s\",\"modulation_seconds\":%.6f,\"lazy_modulation\":%s,"
               "\"prefetch_weights\":%s,\"prefetch_wait_seconds\":%.6f,"
               "\"weight_cache\":{\"budget\":%llu,\"bytes\":%llu,\"entries\":%llu,\"hits\":%llu,\"read_calls\":%llu,\"read_bytes\":%llu}}\n",
               options.profile.c_str(), seconds, output.c_str(), reference_images, indexed_modulation ? "true" : "false",
+              metal_gate ? "true" : "false",
               modulation_cache_status, modulation_seconds,
               lazy_modulation ? "true" : "false",
               options.prefetch_weights ? "true" : "false", store.prefetch_wait_seconds(),
