@@ -244,6 +244,15 @@ std::vector<Tensor> GraphSession::modulation_parts(const Tensor& rows, const Ten
   });
 }
 
+std::vector<Tensor> GraphSession::modulation_gates(const Tensor& rows, const Tensor& indices) {
+  const std::vector<int64_t> shape{indices.shape[0], rows.shape[1]};
+  return run_outputs("modulation-gates", {rows, indices}, {shape, shape}, rows.dtype,
+                     ^NSArray<MPSGraphTensor*>*(MPSGraph* graph, NSArray<MPSGraphTensor*>* input) {
+    MPSGraphTensor* base = modulation_base(graph, input[1]);
+    return @[modulation_part(graph, input[0], base, 2), modulation_part(graph, input[0], base, 5)];
+  });
+}
+
 
 // MLX Steel affine QMM, vendored under ops/metal/mlx_root (MIT, Apple Inc.).
 

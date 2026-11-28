@@ -102,6 +102,20 @@ MLX reference latents correlated 0.9962 with the native MPSGraph path. MPSGraph 
 
 `ONYX_SIMD_SKIP_ODD` alternated paths within one run. The measured average was 0.347 s per block on MPSGraph and 0.825 s on SIMD, a 2.38× gap. Cross-check equations agreed within 0.8 s. Thermal drift was +2.6% and +6.8% respectively, leaving a gap in in-context efficiency. Legacy GPU stage counters asserted on the reference device, its runtime did not expose the MTL4 counter-heap selector, and Instruments tracing required Xcode.
 
+
+## Indexed RMSNorm for text-only AdaLN
+
+Set `ONYX_DIT_INDEXED_NORM=1` for the experimental pure-text path. It indexes shift and scale inside the RMSNorm graphs, then gathers only the two gate tensors for the original MPSGraph residual operations. The native DiT JSON reports the effective `norm_mode` and `gate_mode`.
+
+Three interleaved teapot pairs per resolution used the H3 W4 pack, M5 Max 36 GiB, six PDD steps, seed 42, `max-quality`, warm modulation cache, default prefetch, and VAE batch 25. Both resolutions matched latent and PNG hashes.
+
+| Resolution | Native DiT | End to end | DiT peak physical footprint | DiT max RSS |
+| --- | ---: | ---: | ---: | ---: |
+| 1024×1024 | 14.39 → 14.31 s | 18.12 → 18.03 s | 6.44 → 6.40 GiB | 1.70 → 1.70 GiB |
+| 4096×4096 | 194.52 → 196.21 s | 213.35 → 215.31 s | 12.31 → 11.67 GiB | 1.69 → 1.72 GiB |
+
+The 4K DiT peak physical footprint fell in each pair by 0.43–0.70 GiB. The direction of 4K DiT timing varied across pairs. The observed physical footprint reduction determines the promotion. [Paired samples and verification](../benchmarks/results/m5-max-36gb-dit-indexed-rmsnorm-v1.json)
+
 ## Rejected experiments
 
 | Experiment | Result |
