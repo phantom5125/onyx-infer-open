@@ -420,6 +420,10 @@ Tensor denoise_image(const std::string& model, const std::string& embedding_path
   const char* indexed_modulation_env = std::getenv("ONYX_DIT_INDEXED_MODULATION");
   const bool indexed_modulation = reference_images && indexed_modulation_env &&
       std::string_view(indexed_modulation_env) == "1";
+  const char* indexed_norm_env = std::getenv("ONYX_DIT_INDEXED_NORM");
+  const bool text_indexed_norm = !reference_images && indexed_norm_env &&
+      std::string_view(indexed_norm_env) == "1";
+  const bool indexed_norm = indexed_modulation || text_indexed_norm;
   references.grids.emplace_back(rows, columns);
   auto [cosine, sine] = rope_angles(store, text_count, references.grids);
   Tensor token_indices = make_tensor({sequence_count}, MPSDataTypeInt32, std::vector<float>(sequence_count, 0));
@@ -459,17 +463,23 @@ Tensor denoise_image(const std::string& model, const std::string& embedding_path
     std::vector<Tensor> parts;
     const auto prepare_modulation = [&](uint32_t layer) {
       table = block_modulation_rows(session, modulations[layer], step);
-      if (!indexed_modulation) parts = session.modulation_parts(table, token_indices);
+      if (text_indexed_norm) {
+        parts = session.modulation_gates(table, token_indices);
+      } else if (!indexed_modulation) {
+        parts = session.modulation_parts(table, token_indices);
+      }
     };
     const auto modulate = [&](const Tensor& input, const Tensor& norm, ModulationPart shift) {
-      return indexed_modulation
+      return indexed_norm
           ? session.indexed_modulated_rms_norm(input, norm, table, token_indices, shift, 1e-5)
           : session.modulated_rms_norm(input, norm, parts[shift + 1], parts[shift], 1e-5);
     };
     const auto residual = [&](const Tensor& input, const Tensor& value, ModulationPart gate) {
-      return indexed_modulation
-          ? session.indexed_gated_residual(input, value, table, token_indices, gate)
-          : session.gated_residual(input, value, parts[gate]);
+      if (indexed_modulation) {
+        return session.indexed_gated_residual(input, value, table, token_indices, gate);
+      }
+      const size_t part = text_indexed_norm ? (gate == kAttentionGate ? 0 : 1) : size_t(gate);
+      return session.gated_residual(input, value, parts[part]);
     };
     prepare_modulation(0);
     // The norm that opens each block follows the gated residual that closed the one before.
@@ -525,10 +535,12 @@ Tensor denoise_image(const std::string& model, const std::string& embedding_path
   save_tensor(output, "latent", latent);
   const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count();
   std::printf("{\"stage\":\"dit\",\"profile\":\"%s\",\"steps\":6,\"seconds\":%.6f,\"output\":\"%s\","
-              "\"reference_images\":%zu,\"indexed_modulation\":%s,\"modulation_cache\":\"%s\",\"modulation_seconds\":%.6f,\"lazy_modulation\":%s,"
+              "\"reference_images\":%zu,\"indexed_modulation\":%s,\"norm_mode\":\"%s\",\"gate_mode\":\"%s\","
+              "\"modulation_cache\":\"%s\",\"modulation_seconds\":%.6f,\"lazy_modulation\":%s,"
               "\"prefetch_weights\":%s,\"prefetch_wait_seconds\":%.6f,"
               "\"weight_cache\":{\"budget\":%llu,\"bytes\":%llu,\"entries\":%llu,\"hits\":%llu,\"read_calls\":%llu,\"read_bytes\":%llu}}\n",
               options.profile.c_str(), seconds, output.c_str(), reference_images, indexed_modulation ? "true" : "false",
+              indexed_norm ? "indexed" : "gathered", indexed_modulation ? "indexed" : "gathered",
               modulation_cache_status, modulation_seconds,
               lazy_modulation ? "true" : "false",
               options.prefetch_weights ? "true" : "false", store.prefetch_wait_seconds(),

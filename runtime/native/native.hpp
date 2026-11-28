@@ -159,6 +159,7 @@ class GraphSession {
   // the image modality followed by those of the text modality. Token index 0 selects the
   // image rows and 1 the text rows.
   std::vector<Tensor> modulation_parts(const Tensor& rows, const Tensor& indices);
+  std::vector<Tensor> modulation_gates(const Tensor& rows, const Tensor& indices);
   Tensor cast(const Tensor& x, MPSDataType dtype);
   void enable_profiling(bool enabled) { profile_enabled_ = enabled; }
   std::string profile_json() const;
